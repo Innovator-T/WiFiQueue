@@ -1,4 +1,4 @@
-package com.wifiqueue.app.util
+package com.wifiqueue.app.service
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -10,14 +10,14 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 
-class ConnectivityMonitor(private val context: Context) {
-    fun observeWifiState(): Flow<Boolean> = callbackFlow {
+class WifiConnectionMonitor(private val context: Context) {
+    fun observeWifiConnection(): Flow<Boolean> = callbackFlow {
         val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
-        if (connectivityManager == null) {
-            trySend(false)
-            close()
-            return@callbackFlow
-        }
+            ?: run {
+                trySend(false)
+                close()
+                return@callbackFlow
+            }
 
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
@@ -33,8 +33,10 @@ class ConnectivityMonitor(private val context: Context) {
             }
         }
 
+        // Send initial state
         trySend(isWifiConnected(connectivityManager))
 
+        // Register callback
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             connectivityManager.registerDefaultNetworkCallback(callback)
         } else {
@@ -42,6 +44,7 @@ class ConnectivityMonitor(private val context: Context) {
             connectivityManager.registerNetworkCallback(
                 android.net.NetworkRequest.Builder()
                     .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addTransport(NetworkCapabilities.TRANSPORT_WIFI)
                     .build(),
                 callback
             )

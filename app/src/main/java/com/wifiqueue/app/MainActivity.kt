@@ -1,93 +1,123 @@
-package com.wifiqueue.app.viewmodel
+package com.wifiqueue.app
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import com.wifiqueue.app.data.AppDatabase
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Queue
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wifiqueue.app.data.DownloadItem
 import com.wifiqueue.app.data.DownloadStatus
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
+import com.wifiqueue.app.service.WifiConnectionMonitor
+import com.wifiqueue.app.ui.screens.HistoryScreen
+import com.wifiqueue.app.ui.screens.HomeScreen
+import com.wifiqueue.app.ui.screens.QueueScreen
+import com.wifiqueue.app.ui.screens.SettingsScreen
+import com.wifiqueue.app.ui.theme.WifiQueueTheme
+import com.wifiqueue.app.viewmodel.DownloadViewModel
 
-class DownloadViewModel(application: Application) : AndroidViewModel(application) {
-    private val dao = AppDatabase.getDatabase(application).downloadDao()
-
-    private val _wifiConnected = MutableStateFlow(false)
-    val wifiConnected: StateFlow<Boolean> = _wifiConnected.asStateFlow()
-
-    val downloads: Flow<List<DownloadItem>> = dao.getAll()
-
-    fun updateWifiState(connected: Boolean) {
-        _wifiConnected.value = connected
-        if (connected) {
-            processQueuedDownloads()
-        }
-    }
-
-    fun addDownload(title: String, url: String) {
-        val item = DownloadItem(
-            title = title,
-            url = url,
-            fileName = title,
-            fileSizeBytes = 0L,
-            status = DownloadStatus.WAITING,
-            isWifiOnly = true
-        )
-
-        viewModelScope.launch {
-            dao.insert(item)
-        }
-    }
-
-    fun toggleDownload(item: DownloadItem) {
-        viewModelScope.launch {
-            val updated = when (item.status) {
-                DownloadStatus.WAITING -> item.copy(status = DownloadStatus.QUEUED, updatedAt = System.currentTimeMillis())
-                DownloadStatus.QUEUED -> item.copy(status = DownloadStatus.WAITING, updatedAt = System.currentTimeMillis())
-                DownloadStatus.PAUSED -> item.copy(status = DownloadStatus.QUEUED, updatedAt = System.currentTimeMillis())
-                else -> item
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            WifiQueueTheme {
+                WifiQueueAppScreen()
             }
-            dao.update(updated)
+        }
+    }
+}
+
+@Composable
+fun WifiQueueAppScreen(viewModel: DownloadViewModel = viewModel()) {
+    val downloads by viewModel.downloads.collectAsState(initial = emptyList())
+    val wifiConnected by viewModel.wifiConnected.collectAsState()
+    val tabs = listOf("Home", "Queue", "History", "Settings")
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+
+    val context = LocalContext.current
+    val wifiMonitor = WifiConnectionMonitor(context)
+
+    // Monitor Wi-Fi state and update ViewModel
+    LaunchedEffect(Unit) {
+        wifiMonitor.observeWifiConnection().collect { connected ->
+            viewModel.updateWifiState(connected)
         }
     }
 
-    fun deleteDownload(item: DownloadItem) {
-        viewModelScope.launch {
-            dao.delete(item)
+    val queueList = downloads.filter { it.status != DownloadStatus.COMPLETED }
+    val historyList = downloads.filter { it.status == DownloadStatus.COMPLETED }
+
+    val onAddDownload: (String, String) -> Unit = { title, url ->
+        if (title.isNotBlank() && url.isNotBlank()) {
+            viewModel.addDownload(title.trim(), url.trim())
+            selectedTab = 1
         }
     }
 
-    fun setDownloadProgress(itemId: Long, progress: Int) {
-        viewModelScope.launch {
-            val current = dao.getAll().first().firstOrNull { it.id == itemId } ?: return@launch
-            dao.update(
-                current.copy(
-                    progress = progress.coerceIn(0, 100),
-                    status = if (progress >= 100) DownloadStatus.COMPLETED else DownloadStatus.DOWNLOADING,
-                    updatedAt = System.currentTimeMillis(),
-                    completedAt = if (progress >= 100) System.currentTimeMillis() else null
-                )
-            )
-        }
+    val onToggleDownload: (DownloadItem) -> Unit = { item ->
+        viewModel.toggleDownload(item)
     }
 
-    private fun processQueuedDownloads() {
-        viewModelScope.launch {
-            val queuedItems = dao.getAll().first().filter {
-                it.status == DownloadStatus.WAITING || it.status == DownloadStatus.QUEUED || it.status == DownloadStatus.PAUSED
-            }
+    val onDeleteDownload: (DownloadItem) -> Unit = { item ->
+        viewModel.deleteDownload(item)
+    }
 
-            queuedItems.forEach { item ->
-                dao.update(
-                    item.copy(
-                        status = DownloadStatus.QUEUED,
-                        updatedAt = System.currentTimeMillis()
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                tabs.forEachIndexed { index, title ->
+                    NavigationBarItem(
+                        selected = index == selectedTab,
+                        onClick = { selectedTab = index },
+                        icon = {
+                            val icon = when (title) {
+                                "Home" -> Icons.Default.Home
+                                "Queue" -> Icons.Default.Queue
+                                "History" -> Icons.Default.History
+                                else -> Icons.Default.Settings
+                            }
+                            Icon(icon, contentDescription = title)
+                        },
+                        label = { Text(title) }
                     )
+                }
+            }
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier.padding(paddingValues)
+        ) {
+            when (selectedTab) {
+                0 -> HomeScreen(
+                    wifiConnected = wifiConnected,
+                    onAddDownload = onAddDownload
                 )
+                1 -> QueueScreen(
+                    downloads = queueList,
+                    onToggle = onToggleDownload,
+                    onDelete = onDeleteDownload
+                )
+                2 -> HistoryScreen(downloads = historyList)
+                3 -> SettingsScreen()
             }
         }
     }
