@@ -1,30 +1,45 @@
 package com.wifiqueue.app.data
 
-import androidx.room.Dao
-import androidx.room.Delete
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.Update
-import kotlinx.coroutines.flow.Flow
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Dao
-interface DownloadDao {
-    @Query("SELECT * FROM download_items ORDER BY createdAt DESC")
-    fun getAll(): Flow<List<DownloadItem>>
+@Database(
+    entities = [DownloadItem::class],
+    version = 2,
+    exportSchema = false
+)
+@TypeConverters(Converters::class)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun downloadDao(): DownloadDao
 
-    @Query("SELECT * FROM download_items WHERE status = :status ORDER BY createdAt DESC")
-    fun getByStatus(status: DownloadStatus): Flow<List<DownloadItem>>
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(item: DownloadItem): Long
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE download_items ADD COLUMN downloadManagerId INTEGER"
+                )
+            }
+        }
 
-    @Update
-    suspend fun update(item: DownloadItem)
-
-    @Delete
-    suspend fun delete(item: DownloadItem)
-
-    @Query("DELETE FROM download_items")
-    suspend fun clear()
+        fun getDatabase(context: android.content.Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "wifi_queue_database"
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
 }

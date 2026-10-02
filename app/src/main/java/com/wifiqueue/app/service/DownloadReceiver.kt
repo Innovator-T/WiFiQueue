@@ -10,6 +10,7 @@ import com.wifiqueue.app.data.AppDatabase
 import com.wifiqueue.app.data.DownloadStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class DownloadReceiver : BroadcastReceiver() {
@@ -23,14 +24,15 @@ class DownloadReceiver : BroadcastReceiver() {
         val helper = DownloadNotificationHelper(context)
 
         CoroutineScope(Dispatchers.IO).launch {
-            val item = database.downloadDao().getAll().value.firstOrNull { it.id == downloadId }
+            val item = database.downloadDao().getAll().first().firstOrNull { it.downloadManagerId == downloadId }
             if (item != null) {
                 database.downloadDao().update(
                     item.copy(
                         status = DownloadStatus.COMPLETED,
                         progress = 100,
                         completedAt = System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis()
+                        updatedAt = System.currentTimeMillis(),
+                        downloadManagerId = null
                     )
                 )
                 helper.showDownloadComplete(item.id, item.title)

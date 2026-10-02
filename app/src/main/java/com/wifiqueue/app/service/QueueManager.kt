@@ -47,22 +47,30 @@ class QueueManager(private val context: Context) {
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationUri(Uri.fromFile(file))
 
-            val id = downloadManager.enqueue(request)
+            val downloadId = downloadManager.enqueue(request)
             dao.update(
                 item.copy(
                     status = DownloadStatus.DOWNLOADING,
                     storagePath = file.absolutePath,
+                    downloadManagerId = downloadId,
                     updatedAt = System.currentTimeMillis()
                 )
             )
 
-            val query = DownloadManager.Query().setFilterById(id)
+            val query = DownloadManager.Query().setFilterById(downloadId)
             val cursor = downloadManager.query(query)
             if (cursor != null && cursor.moveToFirst()) {
                 val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
                 val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
                 val progress = if (total > 0L) ((downloaded * 100) / total).toInt() else 0
-                dao.update(item.copy(progress = progress, fileSizeBytes = total, updatedAt = System.currentTimeMillis()))
+                dao.update(
+                    item.copy(
+                        progress = progress,
+                        fileSizeBytes = total,
+                        downloadManagerId = downloadId,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                )
                 cursor.close()
             }
         } catch (e: Exception) {
@@ -95,9 +103,13 @@ class QueueManager(private val context: Context) {
 
     suspend fun cancelDownload(item: DownloadItem) {
         val dao = database.downloadDao()
+        if (item.downloadManagerId != null) {
+            downloadManager.remove(item.downloadManagerId)
+        }
         dao.update(
             item.copy(
                 status = DownloadStatus.CANCELLED,
+                downloadManagerId = null,
                 updatedAt = System.currentTimeMillis()
             )
         )

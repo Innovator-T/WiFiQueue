@@ -16,14 +16,12 @@ class QueueSequencer(private val context: Context) {
     suspend fun processQueue(wifiConnected: Boolean) {
         val dao = database.downloadDao()
 
-        // Only process if Wi-Fi is connected
         if (!wifiConnected) {
             Log.d(TAG, "Wi-Fi not connected, pausing queue processing")
             pauseActiveDownloads()
             return
         }
 
-        // Get current queue state
         val waiting = dao.getByStatus(DownloadStatus.WAITING).first()
         val queued = dao.getByStatus(DownloadStatus.QUEUED).first()
         val downloading = dao.getByStatus(DownloadStatus.DOWNLOADING).first()
@@ -31,18 +29,15 @@ class QueueSequencer(private val context: Context) {
 
         Log.d(TAG, "Queue state: waiting=${waiting.size}, queued=${queued.size}, downloading=${downloading.size}, paused=${paused.size}")
 
-        // Resume any paused downloads
         paused.forEach { item ->
             Log.d(TAG, "Resuming paused download: ${item.title}")
             resumeDownload(item)
         }
 
-        // Check active downloads and update their progress
         downloading.forEach { item ->
             updateDownloadProgress(item)
         }
 
-        // Start next download if there's capacity
         if (downloading.isEmpty()) {
             val nextItem = (waiting + queued).firstOrNull()
             if (nextItem != null) {
@@ -53,8 +48,9 @@ class QueueSequencer(private val context: Context) {
     }
 
     private suspend fun updateDownloadProgress(item: com.wifiqueue.app.data.DownloadItem) {
+        val downloadId = item.downloadManagerId ?: return
         try {
-            val query = DownloadManager.Query().setFilterById(item.id)
+            val query = DownloadManager.Query().setFilterById(downloadId)
             val cursor = downloadManager.query(query)
 
             if (cursor != null && cursor.moveToFirst()) {
@@ -82,7 +78,8 @@ class QueueSequencer(private val context: Context) {
                                 status = DownloadStatus.COMPLETED,
                                 progress = 100,
                                 completedAt = System.currentTimeMillis(),
-                                updatedAt = System.currentTimeMillis()
+                                updatedAt = System.currentTimeMillis(),
+                                downloadManagerId = null
                             )
                         )
                         notificationHelper.showDownloadComplete(item.id, item.title)
@@ -93,6 +90,7 @@ class QueueSequencer(private val context: Context) {
                         database.downloadDao().update(
                             item.copy(
                                 status = DownloadStatus.FAILED,
+                                downloadManagerId = null,
                                 updatedAt = System.currentTimeMillis()
                             )
                         )
@@ -120,9 +118,13 @@ class QueueSequencer(private val context: Context) {
 
     suspend fun cancelDownload(item: com.wifiqueue.app.data.DownloadItem) {
         val dao = database.downloadDao()
+        if (item.downloadManagerId != null) {
+            downloadManager.remove(item.downloadManagerId)
+        }
         dao.update(
             item.copy(
                 status = DownloadStatus.CANCELLED,
+                downloadManagerId = null,
                 updatedAt = System.currentTimeMillis()
             )
         )
