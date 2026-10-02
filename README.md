@@ -2,73 +2,117 @@ package com.wifiqueue.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun SettingsScreen() {
-    var wifiOnly by remember { mutableStateOf(true) }
-    var autoResume by remember { mutableStateOf(true) }
+fun HomeScreen(
+    wifiConnected: Boolean,
+    onAddDownload: (String, String) -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            text = "Add download",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold
+        )
 
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Card {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (wifiConnected) Icons.Default.Wifi else Icons.Default.WifiOff,
+                        contentDescription = null
+                    )
+                    Text(
+                        text = if (wifiConnected) "Wi‑Fi connected" else "Waiting for Wi‑Fi",
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+            }
+        }
+
+        Card {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                androidx.compose.foundation.layout.Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Wi‑Fi only mode")
-                    Switch(checked = wifiOnly, onCheckedChange = { wifiOnly = it })
-                }
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Movie or file name") },
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-                androidx.compose.foundation.layout.Row(
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Download URL") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Button(
+                    onClick = { onAddDownload(title, url) },
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    enabled = title.isNotBlank() && url.isNotBlank()
                 ) {
-                    Text("Auto resume")
-                    Switch(checked = autoResume, onCheckedChange = { autoResume = it })
+                    Icon(Icons.Default.AddCircle, contentDescription = null)
+                    Text("Add to queue")
                 }
             }
         }
 
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Card {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Storage overview")
-                Text("Used: 38.2 GB")
-                Text("Available: 24.7 GB")
-                Text("Queue requires: 4.1 GB")
+                Text("Universal download manager")
+                Text("- Wi‑Fi only mode")
+                Text("- Auto queue handling")
+                Text("- Background downloads")
             }
         }
     }
