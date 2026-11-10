@@ -1,50 +1,15 @@
-package com.wifiqueue.app.viewmodel
+package com.wifiqueue.app.ui.theme
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import com.wifiqueue.app.data.AppDatabase
-import com.wifiqueue.app.data.DownloadItem
-import com.wifiqueue.app.data.DownloadStatus
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.Color
 
-class DownloadViewModel(application: Application) : AndroidViewModel(application) {
-    private val dao = AppDatabase.getDatabase(application).downloadDao()
+val Purple80 = Color(0xFFD0BCFF)
+val PurpleGrey80 = Color(0xFFCCC2DC)
+val Pink80 = Color(0xFFEFB8C8)
 
-    val downloads: Flow<List<DownloadItem>> = dao.getAll()
+val Purple40 = Color(0xFF6650a4)
+val PurpleGrey40 = Color(0xFF625b71)
+val Pink40 = Color(0xFF7D5260)
 
-    fun addDownload(title: String, url: String) {
-        val item = DownloadItem(
-            title = title,
-            url = url,
-            fileName = title,
-            fileSizeBytes = 0L,
-            status = DownloadStatus.WAITING,
-            isWifiOnly = true
-        )
-
-        viewModelScope.launch {
-            dao.insert(item)
-        }
-    }
-
-    fun toggleDownload(item: DownloadItem) {
-        viewModelScope.launch {
-            val updated = when (item.status) {
-                DownloadStatus.WAITING -> item.copy(status = DownloadStatus.QUEUED, updatedAt = System.currentTimeMillis())
-                DownloadStatus.QUEUED -> item.copy(status = DownloadStatus.WAITING, updatedAt = System.currentTimeMillis())
-                DownloadStatus.PAUSED -> item.copy(status = DownloadStatus.QUEUED, updatedAt = System.currentTimeMillis())
-                else -> item
-            }
-            dao.update(updated)
-        }
-    }
-
-    fun deleteDownload(item: DownloadItem) {
-        viewModelScope.launch {
-            dao.delete(item)
-        }
-    }
-}
+val WifiBlue = Color(0xFF2F80ED)
+val SuccessGreen = Color(0xFF27AE60)
+val WarningAmber = Color(0xFFF2C94C)

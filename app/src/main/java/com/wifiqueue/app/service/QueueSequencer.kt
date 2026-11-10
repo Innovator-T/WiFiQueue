@@ -1,157 +1,104 @@
 package com.wifiqueue.app.service
 
-import android.app.DownloadManager
 import android.content.Context
 import android.util.Log
 import com.wifiqueue.app.data.AppDatabase
 import com.wifiqueue.app.data.DownloadStatus
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
+/**
+ * Serializes every queue/engine operation behind a process-wide mutex, so the
+ * periodic worker, the UI actions and the completion receiver can never start
+ * two DownloadManager requests at the same time.
+ *
+ * Sequential rule enforced here: there is at most one DOWNLOADING item at any
+ * moment; the next item starts only when no active item remains after
+ * reconciliation. CANCELLED items are skipped, FAILED items stay failed until
+ * the user retries, and user-paused items are never re-enqueued automatically.
+ */
 class QueueSequencer(private val context: Context) {
     private val database = AppDatabase.getDatabase(context)
+    private val dao = database.downloadDao()
     private val queueManager = QueueManager(context)
-    private val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-    private val notificationHelper = DownloadNotificationHelper(context)
 
+    /**
+     * Main entry point. When Wi-Fi is available: reconcile all DOWNLOADING
+     * items with the real DownloadManager state, then start the next QUEUED
+     * item if the queue is idle. When Wi-Fi is unavailable: actually stop the
+     * active download (remove the system request) and leave the queue waiting.
+     */
     suspend fun processQueue(wifiConnected: Boolean) {
-        val dao = database.downloadDao()
-
-        if (!wifiConnected) {
-            Log.d(TAG, "Wi-Fi not connected, pausing queue processing")
-            pauseActiveDownloads()
-            return
-        }
-
-        val waiting = dao.getByStatus(DownloadStatus.WAITING).first()
-        val queued = dao.getByStatus(DownloadStatus.QUEUED).first()
-        val downloading = dao.getByStatus(DownloadStatus.DOWNLOADING).first()
-        val paused = dao.getByStatus(DownloadStatus.PAUSED).first()
-
-        Log.d(TAG, "Queue state: waiting=${waiting.size}, queued=${queued.size}, downloading=${downloading.size}, paused=${paused.size}")
-
-        paused.forEach { item ->
-            Log.d(TAG, "Resuming paused download: ${item.title}")
-            resumeDownload(item)
-        }
-
-        downloading.forEach { item ->
-            updateDownloadProgress(item)
-        }
-
-        if (downloading.isEmpty()) {
-            val nextItem = (waiting + queued).firstOrNull()
-            if (nextItem != null) {
-                Log.d(TAG, "Starting next download: ${nextItem.title}")
-                queueManager.startDownload(nextItem)
+        LOCK.withLock {
+            if (!wifiConnected) {
+                Log.d(TAG, "Wi-Fi not connected; stopping active download (waits for Wi-Fi)")
+                haltActiveForNetworkLoss()
+                return@withLock
             }
+
+            val active = dao.getByStatus(DownloadStatus.DOWNLOADING).first()
+            active.forEach { item ->
+                queueManager.refreshStatus(item)
+            }
+
+            advanceIfIdle()
         }
     }
 
-    private suspend fun updateDownloadProgress(item: com.wifiqueue.app.data.DownloadItem) {
-        val downloadId = item.downloadManagerId ?: return
-        try {
-            val query = DownloadManager.Query().setFilterById(downloadId)
-            val cursor = downloadManager.query(query)
-
-            if (cursor != null && cursor.moveToFirst()) {
-                val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                val bytesDownloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                val totalBytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-
-                val progress = if (totalBytes > 0L) ((bytesDownloaded * 100) / totalBytes).toInt() else 0
-
-                database.downloadDao().update(
-                    item.copy(
-                        progress = progress,
-                        fileSizeBytes = totalBytes,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-
-                notificationHelper.showDownloadProgress(item.id, item.title, progress, totalBytes)
-
-                when (status) {
-                    DownloadManager.STATUS_SUCCESSFUL -> {
-                        Log.d(TAG, "Download completed: ${item.title}")
-                        database.downloadDao().update(
-                            item.copy(
-                                status = DownloadStatus.COMPLETED,
-                                progress = 100,
-                                completedAt = System.currentTimeMillis(),
-                                updatedAt = System.currentTimeMillis(),
-                                downloadManagerId = null
-                            )
-                        )
-                        notificationHelper.showDownloadComplete(item.id, item.title)
-                    }
-
-                    DownloadManager.STATUS_FAILED -> {
-                        Log.e(TAG, "Download failed: ${item.title}")
-                        database.downloadDao().update(
-                            item.copy(
-                                status = DownloadStatus.FAILED,
-                                downloadManagerId = null,
-                                updatedAt = System.currentTimeMillis()
-                            )
-                        )
-                        notificationHelper.showDownloadFailed(item.id, item.title)
-                    }
-                }
-
-                cursor.close()
+    /**
+     * Called by DownloadReceiver when the system engine broadcasts that a job
+     * finished. Reconciles exactly this record (success or failure), then
+     * advances the queue if it is now idle. Safe after process death: it looks
+     * up the record by DownloadManager job id.
+     */
+    suspend fun onDownloadCompleted(jobId: Long) {
+        LOCK.withLock {
+            val item = dao.getByDownloadManagerId(jobId)
+            if (item != null && item.status == DownloadStatus.DOWNLOADING) {
+                queueManager.refreshStatus(item)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error updating download progress for ${item.title}", e)
+            advanceIfIdle()
         }
     }
 
+    /** User pause (also used by the Queue screen Pause button). */
+    suspend fun pauseDownload(item: com.wifiqueue.app.data.DownloadItem) {
+        LOCK.withLock { queueManager.pauseDownload(item) }
+    }
+
+    /** User resume: requeues; the next processQueue call does the start. */
     suspend fun resumeDownload(item: com.wifiqueue.app.data.DownloadItem) {
-        val dao = database.downloadDao()
-        dao.update(
-            item.copy(
-                status = DownloadStatus.QUEUED,
-                updatedAt = System.currentTimeMillis()
-            )
-        )
-        queueManager.startDownload(item.copy(status = DownloadStatus.QUEUED))
+        LOCK.withLock { queueManager.resumeDownload(item) }
     }
 
+    /** Cancel: removes the live request plus partial data; skips if terminal. */
     suspend fun cancelDownload(item: com.wifiqueue.app.data.DownloadItem) {
-        val dao = database.downloadDao()
-        if (item.downloadManagerId != null) {
-            downloadManager.remove(item.downloadManagerId)
-        }
-        dao.update(
-            item.copy(
-                status = DownloadStatus.CANCELLED,
-                downloadManagerId = null,
-                updatedAt = System.currentTimeMillis()
-            )
-        )
-        notificationHelper.cancel(item.id)
-        item.storagePath?.let { path ->
-            val file = java.io.File(path)
-            if (file.exists()) file.delete()
+        LOCK.withLock { queueManager.cancelDownload(item) }
+    }
+
+    private suspend fun haltActiveForNetworkLoss() {
+        dao.getByStatus(DownloadStatus.DOWNLOADING).first().forEach { item ->
+            queueManager.stopForNetworkLoss(item)
         }
     }
 
-    private suspend fun pauseActiveDownloads() {
-        val dao = database.downloadDao()
-        val downloading = dao.getByStatus(DownloadStatus.DOWNLOADING).first()
+    private suspend fun advanceIfIdle() {
+        // One download at a time: only start when nothing is active.
+        val active = dao.getByStatus(DownloadStatus.DOWNLOADING).first()
+        if (active.isNotEmpty()) return
 
-        downloading.forEach { item ->
-            Log.d(TAG, "Pausing download due to Wi-Fi loss: ${item.title}")
-            dao.update(
-                item.copy(
-                    status = DownloadStatus.PAUSED,
-                    updatedAt = System.currentTimeMillis()
-                )
-            )
-            notificationHelper.cancel(item.id)
+        val next = dao.getByStatus(DownloadStatus.QUEUED).first().firstOrNull()
+        if (next != null) {
+            Log.d(TAG, "Starting next queued download: ${next.title}")
+            queueManager.startDownload(next)
         }
     }
 
     companion object {
         private const val TAG = "QueueSequencer"
+
+        /** Process-wide lock shared by every QueueSequencer instance. */
+        private val LOCK = Mutex()
     }
 }

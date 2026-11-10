@@ -105,6 +105,15 @@ fun DownloadItemCard(
                         fontSize = 10.sp,
                         modifier = Modifier.padding(top = 4.dp)
                     )
+                    item.errorMessage?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
                 }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Default.Delete, contentDescription = "Delete")
@@ -164,9 +173,9 @@ fun DownloadItemCard(
 private fun getStatusLabel(status: DownloadStatus): String {
     return when (status) {
         DownloadStatus.WAITING -> "Waiting to be queued"
-        DownloadStatus.QUEUED -> "In queue, waiting for Wi‑Fi"
+        DownloadStatus.QUEUED -> "Queued – waiting to start"
         DownloadStatus.DOWNLOADING -> "Downloading..."
-        DownloadStatus.PAUSED -> "Paused – Wi‑Fi lost"
+        DownloadStatus.PAUSED -> "Paused"
         DownloadStatus.COMPLETED -> "Completed"
         DownloadStatus.FAILED -> "Failed – tap Retry"
         DownloadStatus.CANCELLED -> "Cancelled"

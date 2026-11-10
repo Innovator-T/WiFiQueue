@@ -9,7 +9,9 @@ class WifiQueueApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Enqueue periodic queue processing work
+        // Periodic safety net plus one immediate pass so downloads that were
+        // DOWNLOADING last time the process died are reconciled right away.
         QueueProcessorWorker.enqueue(this)
+        QueueProcessorWorker.enqueueNow(this)
     }
 }

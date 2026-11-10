@@ -18,5 +18,6 @@ data class DownloadItem(
     val isWifiOnly: Boolean = true,
     val storagePath: String? = null,
     val completedAt: Long? = null,
-    val downloadManagerId: Long? = null
+    val downloadManagerId: Long? = null,
+    val errorMessage: String? = null
 )

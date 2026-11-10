@@ -4,15 +4,18 @@ import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.os.Build
-import com.wifiqueue.app.data.AppDatabase
-import com.wifiqueue.app.data.DownloadStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+/**
+ * Receives ACTION_DOWNLOAD_COMPLETE from the system DownloadManager.
+ *
+ * The broadcast only says WHOSE job id finished, not whether it succeeded, so
+ * this receiver hands the job id to QueueSequencer, which reconciles the real
+ * DownloadManager state (success/failure/progress) and then advances the
+ * queue. goAsync() keeps the receiver alive while the database work runs.
+ */
 class DownloadReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
@@ -20,34 +23,17 @@ class DownloadReceiver : BroadcastReceiver() {
         val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
         if (downloadId == -1L) return
 
-        val database = AppDatabase.getDatabase(context)
-        val helper = DownloadNotificationHelper(context)
-
+        val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
-            val item = database.downloadDao().getAll().first().firstOrNull { it.downloadManagerId == downloadId }
-            if (item != null) {
-                database.downloadDao().update(
-                    item.copy(
-                        status = DownloadStatus.COMPLETED,
-                        progress = 100,
-                        completedAt = System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis(),
-                        downloadManagerId = null
-                    )
-                )
-                helper.showDownloadComplete(item.id, item.title)
-            }
-        }
-    }
-
-    companion object {
-        fun register(context: Context) {
-            val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(DownloadReceiver(), filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("DEPRECATION")
-                context.registerReceiver(DownloadReceiver(), filter)
+            try {
+                val sequencer = QueueSequencer(context.applicationContext)
+                sequencer.onDownloadCompleted(downloadId)
+            } catch (e: Exception) {
+                // Even if reconciliation fails here, the periodic worker and
+                // UI polling reconcile the same record later.
+                QueueProcessorWorker.enqueueNow(context.applicationContext)
+            } finally {
+                pendingResult.finish()
             }
         }
     }

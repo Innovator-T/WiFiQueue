@@ -7,6 +7,7 @@ import com.wifiqueue.app.data.AppDatabase
 import com.wifiqueue.app.data.DownloadItem
 import com.wifiqueue.app.data.DownloadStatus
 import com.wifiqueue.app.service.QueueSequencer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,10 +24,26 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
 
     val downloads: Flow<List<DownloadItem>> = dao.getAll()
 
+    init {
+        // Progress loop: only runs while Wi-Fi is connected, reconciles the
+        // active download with the system engine and starts the next queued
+        // item when it completes. When nothing is active or Wi-Fi is gone the
+        // tick does almost no work; the loop dies with the ViewModel, so it
+        // cannot run uncontrolled in the background.
+        viewModelScope.launch {
+            while (true) {
+                delay(PROGRESS_REFRESH_MS)
+                if (_wifiConnected.value) {
+                    runCatching { queueSequencer.processQueue(_wifiConnected.value) }
+                }
+            }
+        }
+    }
+
     fun updateWifiState(connected: Boolean) {
         _wifiConnected.value = connected
         viewModelScope.launch {
-            queueSequencer.processQueue(connected)
+            runCatching { queueSequencer.processQueue(connected) }
         }
     }
 
@@ -43,9 +60,14 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch {
             dao.insert(item)
+            // Adds become active only once the user queues them; no work needed.
         }
     }
 
+    /**
+     * Queue screen's main action button. Every path runs through the sequencer
+     * so transitions, DownloadManager jobs and database state stay consistent.
+     */
     fun toggleDownload(item: DownloadItem) {
         viewModelScope.launch {
             when (item.status) {
@@ -55,21 +77,48 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 DownloadStatus.QUEUED -> {
                     dao.update(item.copy(status = DownloadStatus.WAITING, updatedAt = System.currentTimeMillis()))
                 }
+                // REAL pause: removes the live DownloadManager request and
+                // partial data before recording the PAUSED state.
+                DownloadStatus.DOWNLOADING -> {
+                    runCatching { queueSequencer.pauseDownload(item) }
+                }
+                // REAL resume: clears the old job and re-queues; the follow-up
+                // processQueue call performs the actual sequential start.
                 DownloadStatus.PAUSED -> {
-                    queueSequencer.resumeDownload(item)
+                    runCatching { queueSequencer.resumeDownload(item) }
                 }
-                DownloadStatus.FAILED -> {
-                    dao.update(item.copy(status = DownloadStatus.QUEUED, progress = 0, updatedAt = System.currentTimeMillis()))
+                // Retry of failed or previously cancelled downloads.
+                DownloadStatus.FAILED, DownloadStatus.CANCELLED -> {
+                    dao.update(
+                        item.copy(
+                            status = DownloadStatus.QUEUED,
+                            progress = 0,
+                            errorMessage = null,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
                 }
-                else -> {}
+                DownloadStatus.COMPLETED -> {
+                    // Terminal state; the button is disabled for COMPLETED.
+                    return@launch
+                }
             }
+            // Let the sequencer decide what runs next (sequential queue).
+            runCatching { queueSequencer.processQueue(_wifiConnected.value) }
         }
     }
 
+    /** Delete a record: cancel any live job first, then remove the row. */
     fun deleteDownload(item: DownloadItem) {
         viewModelScope.launch {
-            queueSequencer.cancelDownload(item)
+            runCatching { queueSequencer.cancelDownload(item) }
             dao.delete(item)
+            runCatching { queueSequencer.processQueue(_wifiConnected.value) }
         }
+    }
+
+    companion object {
+        /** Poll cadence while the app UI is alive; bounded by the ViewModel scope. */
+        const val PROGRESS_REFRESH_MS = 2_500L
     }
 }
