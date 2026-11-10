@@ -34,9 +34,6 @@ object DownloadFailureMessages {
             DownloadManager.ERROR_CANNOT_RESUME ->
                 "The interrupted download could not be continued and must restart."
 
-            DownloadManager.ERROR_BLOCKED ->
-                "The download was blocked by the system."
-
             else ->
                 "The download failed. Check the URL and your connection, then retry."
         }

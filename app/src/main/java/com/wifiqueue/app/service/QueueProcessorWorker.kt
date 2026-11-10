@@ -63,7 +63,7 @@ class QueueProcessorWorker(
             val workRequest = PeriodicWorkRequestBuilder<QueueProcessorWorker>(
                 15, TimeUnit.MINUTES
             )
-                .setBackoffPolicy(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
                 .build()
 
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(

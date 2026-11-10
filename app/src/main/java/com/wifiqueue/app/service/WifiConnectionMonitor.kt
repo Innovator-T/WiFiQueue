@@ -44,7 +44,7 @@ class WifiConnectionMonitor(private val context: Context) {
             connectivityManager.registerNetworkCallback(
                 android.net.NetworkRequest.Builder()
                     .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .addTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                     .build(),
                 callback
             )
