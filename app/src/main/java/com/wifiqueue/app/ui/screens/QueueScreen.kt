@@ -114,6 +114,18 @@ fun DownloadItemCard(
                             modifier = Modifier.padding(top = 2.dp)
                         )
                     }
+                    // What Android DownloadManager actually reported for this
+                    // job (pending / paused + reason). Absent while a transfer
+                    // runs normally, so it never becomes permanent noise.
+                    item.systemState?.let { state ->
+                        Text(
+                            state,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
                 }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Default.Delete, contentDescription = "Delete")
@@ -136,7 +148,11 @@ fun DownloadItemCard(
                         style = MaterialTheme.typography.bodySmall
                     )
                     Text(
-                        "${formatBytes((item.progress.toLong() * item.fileSizeBytes) / 100)} / ${formatBytes(item.fileSizeBytes)}",
+                        if (item.fileSizeBytes > 0L) {
+                            "${formatBytes(item.downloadedBytes)} / ${formatBytes(item.fileSizeBytes)}"
+                        } else {
+                            "${formatBytes(item.downloadedBytes)} / size not reported yet"
+                        },
                         style = MaterialTheme.typography.bodySmall
                     )
                 }

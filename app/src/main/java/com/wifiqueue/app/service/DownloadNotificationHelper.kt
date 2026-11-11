@@ -24,7 +24,18 @@ class DownloadNotificationHelper(private val context: Context) {
         }
     }
 
-    fun showDownloadProgress(itemId: Long, title: String, progress: Int, totalBytes: Long) {
+    /**
+     * [downloadedBytes] and [totalBytes] are the real values reported by
+     * DownloadManager, so the notification never shows a derived byte count.
+     * Until Android knows the total size the progress bar stays indeterminate.
+     */
+    fun showDownloadProgress(
+        itemId: Long,
+        title: String,
+        progress: Int,
+        downloadedBytes: Long,
+        totalBytes: Long
+    ) {
         val intent = Intent(context, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -36,8 +47,14 @@ class DownloadNotificationHelper(private val context: Context) {
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(title)
-            .setContentText("${formatBytes(totalBytes * progress / 100L)} / ${formatBytes(totalBytes)}")
-            .setProgress(100, progress, false)
+            .setContentText(
+                if (totalBytes > 0L) {
+                    "${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}"
+                } else {
+                    "${formatBytes(downloadedBytes)} downloaded – size not reported yet"
+                }
+            )
+            .setProgress(100, progress, totalBytes <= 0L)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
 
