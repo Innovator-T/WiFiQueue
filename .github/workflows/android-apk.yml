@@ -34,27 +34,51 @@ jobs:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
           accept-android-sdk-licenses: true
 
-      # No Gradle Wrapper is committed in this repository, so Gradle 8.7 is
-      # provisioned here and invoked directly instead of via ./gradlew.
+      # AGP 8.5.2 requires Gradle 8.7 or newer. This repository does not commit
+      # a wrapper, so Gradle 8.7 is pinned here and used to generate the
+      # wrapper, keeping the build command identical to a local checkout.
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.7'
           cache-provider: basic
 
+      - name: Create Gradle wrapper
+        run: gradle wrapper --gradle-version 8.7 --distribution-type bin
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
       - name: Show toolchain versions
         run: |
           java -version
-          gradle --version
+          ./gradlew --version
 
       - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Verify APK was produced
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          if [ ! -f "$APK" ]; then
+            echo "::error::Expected APK not found at $APK"
+            exit 1
+          fi
+          SIZE=$(stat -c %s "$APK")
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "::error::APK at $APK is suspiciously small ($SIZE bytes)"
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$APK" \
+            | grep -E '^(package|sdkVersion|targetSdkVersion|launchable-activity)'
+          echo "APK size: $SIZE bytes"
+          sha256sum "$APK"
 
       - name: Upload debug APK
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: app-debug-apk
+          name: WiFiQueue-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
