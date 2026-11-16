@@ -3,7 +3,9 @@ package com.wifiqueue.app.service
 import android.content.Context
 import android.util.Log
 import com.wifiqueue.app.data.AppDatabase
+import com.wifiqueue.app.data.AppSettings
 import com.wifiqueue.app.data.DownloadStatus
+import com.wifiqueue.app.data.SettingsRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -17,32 +19,38 @@ import kotlinx.coroutines.sync.withLock
  * moment; the next item starts only when no active item remains after
  * reconciliation. CANCELLED items are skipped, FAILED items stay failed until
  * the user retries, and user-paused items are never re-enqueued automatically.
+ *
+ * Network behaviour follows the persisted settings: with "Wi-Fi only" on, a
+ * lost Wi-Fi connection stops the active download; with it off the system
+ * engine may keep running on mobile data and nothing is halted. "Auto resume"
+ * decides whether a stopped download is requeued or left paused for the user.
  */
 class QueueSequencer(private val context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val dao = database.downloadDao()
     private val queueManager = QueueManager(context)
+    private val settingsRepository = SettingsRepository(context)
 
     /**
-     * Main entry point. When Wi-Fi is available: reconcile all DOWNLOADING
-     * items with the real DownloadManager state, then start the next QUEUED
-     * item if the queue is idle. When Wi-Fi is unavailable: actually stop the
-     * active download (remove the system request) and leave the queue waiting.
+     * Main entry point. Reconciles all DOWNLOADING items with the real
+     * DownloadManager state, then starts the next QUEUED item if the queue is
+     * idle. When Wi-Fi is unavailable and downloads are Wi-Fi only, the active
+     * download is actually stopped and the queue waits.
      */
     suspend fun processQueue(wifiConnected: Boolean) {
         LOCK.withLock {
-            if (!wifiConnected) {
+            val settings = settingsRepository.settings.first()
+
+            if (!wifiConnected && settings.wifiOnly) {
                 Log.d(TAG, "Wi-Fi not connected; stopping active download (waits for Wi-Fi)")
-                haltActiveForNetworkLoss()
+                haltActiveForNetworkLoss(autoResume = settings.autoResume)
                 return@withLock
             }
 
             val active = dao.getByStatus(DownloadStatus.DOWNLOADING).first()
-            active.forEach { item ->
-                queueManager.refreshStatus(item)
-            }
+            active.forEach { item -> queueManager.refreshStatus(item) }
 
-            advanceIfIdle()
+            advanceIfIdle(settings)
         }
     }
 
@@ -58,7 +66,7 @@ class QueueSequencer(private val context: Context) {
             if (item != null && item.status == DownloadStatus.DOWNLOADING) {
                 queueManager.refreshStatus(item)
             }
-            advanceIfIdle()
+            advanceIfIdle(settingsRepository.settings.first())
         }
     }
 
@@ -77,13 +85,13 @@ class QueueSequencer(private val context: Context) {
         LOCK.withLock { queueManager.cancelDownload(item) }
     }
 
-    private suspend fun haltActiveForNetworkLoss() {
+    private suspend fun haltActiveForNetworkLoss(autoResume: Boolean) {
         dao.getByStatus(DownloadStatus.DOWNLOADING).first().forEach { item ->
-            queueManager.stopForNetworkLoss(item)
+            queueManager.stopForNetworkLoss(item, autoResume)
         }
     }
 
-    private suspend fun advanceIfIdle() {
+    private suspend fun advanceIfIdle(settings: AppSettings) {
         // One download at a time: only start when nothing is active.
         val active = dao.getByStatus(DownloadStatus.DOWNLOADING).first()
         if (active.isNotEmpty()) return
@@ -91,7 +99,7 @@ class QueueSequencer(private val context: Context) {
         val next = dao.getByStatus(DownloadStatus.QUEUED).first().firstOrNull()
         if (next != null) {
             Log.d(TAG, "Starting next queued download: ${next.title}")
-            queueManager.startDownload(next)
+            queueManager.startDownload(next, settings)
         }
     }
 
