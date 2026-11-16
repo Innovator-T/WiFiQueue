@@ -57,6 +57,8 @@ class MainActivity : ComponentActivity() {
 fun WifiQueueAppScreen(viewModel: DownloadViewModel = viewModel()) {
     val downloads by viewModel.downloads.collectAsState(initial = emptyList())
     val wifiConnected by viewModel.wifiConnected.collectAsState()
+    val settings by viewModel.settings.collectAsState()
+    val storageInfo by viewModel.storageInfo.collectAsState()
     val tabs = listOf("Home", "Queue", "History", "Settings")
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
@@ -147,7 +149,14 @@ fun WifiQueueAppScreen(viewModel: DownloadViewModel = viewModel()) {
                     onDelete = onDeleteDownload
                 )
                 2 -> HistoryScreen(downloads = historyList)
-                3 -> SettingsScreen()
+                3 -> SettingsScreen(
+                    settings = settings,
+                    storageInfo = storageInfo,
+                    onWifiOnlyChange = viewModel::setWifiOnly,
+                    onAutoResumeChange = viewModel::setAutoResume,
+                    onDownloadOvernightChange = viewModel::setDownloadOvernight,
+                    onRefreshStorage = viewModel::refreshStorageInfo
+                )
             }
         }
     }
