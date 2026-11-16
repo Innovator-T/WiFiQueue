@@ -22,7 +22,8 @@ Built with Kotlin, Jetpack Compose, Room, WorkManager and the system
 - **Honest status reporting** — the queue shows progress, real failure reasons
   ("not enough space", "too many redirects", etc.) and what happens next.
 - **History and settings** — completed downloads are separated into History;
-  Settings is currently UI-only, with toggles that are not persisted or applied.
+  Settings persists three preferences the queue engine actually applies, and
+  shows the real capacity of the download volume plus what the queue needs.
 
 ## How it works
 
@@ -47,8 +48,9 @@ Periodic WorkManager job ─────────────> QueueSequencer
 - `QueueProcessorWorker` runs a reconciliation pass at WorkManager's 15-minute
   minimum interval (deferrable by the system) and once immediately at app
   startup.
-- `DownloadViewModel` ticks every 2.5 seconds while the UI is alive, and
-  reconciles only while Wi-Fi is connected.
+- `DownloadViewModel` ticks every 2.5 seconds while the UI is alive; the
+  sequencer decides from the persisted settings whether a missing Wi-Fi
+  connection should stop anything.
 
 ### Download states
 
@@ -79,6 +81,21 @@ Files are written to the app-specific external Downloads directory
 (`Context.getExternalFilesDir(DIRECTORY_DOWNLOADS)`), so no broad storage
 permission is needed. Destination names are de-duplicated (`Movie (1).mp4`) so
 two downloads never target the same path.
+
+### Settings
+
+The three Settings toggles are stored with DataStore (`wifiqueue_settings`) and
+read by the engine itself, so they apply immediately and survive restarts:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| Wi‑Fi only mode | on | Requests are pinned to `NETWORK_WIFI`; when off the request keeps DownloadManager's default network types, so a transfer may continue on mobile data. Losing Wi-Fi only stops the active download while this is on. |
+| Auto resume | on | A download stopped by a lost connection returns to `QUEUED` and restarts automatically; when off it becomes `PAUSED` and waits for Resume. |
+| Download overnight | off | Queued downloads only start between 22:00 and 06:00; when off they start at any time. Only the start is gated. |
+
+The Storage overview card reads the download volume with `StatFs` and sums the
+known sizes of unfinished downloads (`queueItemsWithUnknownSize` counts those
+whose size Android has not reported yet).
 
 ## Project structure
 
@@ -131,5 +148,8 @@ notifications are hidden.
   not resolved.
 - Downloads stopped by pause or Wi-Fi loss restart from the beginning (see above); a DownloadManager job survives app process death and keeps running.
 - Failed downloads stay in `FAILED` until the user taps Retry.
-- The Settings toggles are UI placeholders; they are not persisted or applied.
+- "Download overnight" gates only the start of a download; a transfer already
+  running is allowed to finish.
+- "Auto resume" is off: a download stopped by a lost connection stays PAUSED
+  until the user taps Resume.
 - There are no automated tests in the repository yet.
