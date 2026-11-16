@@ -72,7 +72,7 @@ Record **PASS / FAIL / BLOCKED** per row and keep the evidence notes.
 | C3 | Check that mobile data was NOT used: Settings → Network → Data usage (or SIM data counter) while waiting | No meaningful data consumed by WiFiQueue — the request is pinned to `NETWORK_WIFI` |
 | C4 | Check the notification shade | The progress notification for that download is gone |
 | C5 | Check partial file was discarded: Files → Android/data/com.wifiqueue.app/files/Download | No leftover partial file for the cancelled transfer |
-| C6 | **Turn Wi-Fi back ON**, app in foreground | QUEUED item restarts **automatically** within ~5 s, and starts from **0 bytes** ("downloaded" restarts low, total unchanged) — this is the documented DownloadManager limitation, not a bug |
+| C6 | **Turn Wi-Fi back ON**, app in foreground (Auto resume on — the default) | QUEUED item restarts **automatically** within ~5 s, and starts from **0 bytes** ("downloaded" restarts low, total unchanged) — this is the documented DownloadManager limitation, not a bug |
 | C7 | Repeat C1–C6 but with the app **backgrounded** (press Home) before dropping Wi-Fi | Same end state expected, but restart may be delayed: background reconciliation is the 15-minute WorkManager pass, so allow up to ~15 min (Redmi battery saver can defer it further) — delay here is expected behaviour, not a FAIL |
 | C8 | Wi-Fi off, tap **Resume/Queue** manually on the queued item | Stays QUEUED with no error; nothing starts until Wi-Fi returns |
 
@@ -136,14 +136,21 @@ Each case must show a **specific** message in red on the card, status "**Failed 
 
 ---
 
-## H. Settings and known placeholders (record, don't fail)
+## H. Settings (persisted and applied)
 
-| # | Action | Current expected behaviour |
+| # | Action | Expected result |
 |---|---|---|
-| H1 | Settings tab → toggle "Wi‑Fi only mode" off, back on | Toggle moves but **changes nothing**: Wi-Fi-only is enforced in the engine unconditionally. This is a known placeholder (README documents it) |
-| H2 | Toggle "Auto resume", "Download overnight" | Same — UI only, not persisted; leave the tab and return, switches reset to defaults |
-| H3 | "Storage overview" card | Shows **hard-coded sample numbers** (38.2 GB / 24.7 GB), not real device figures. Known placeholder — do not file as a build/APK defect, but worth listing as a product bug |
-| H4 | Notification permission declined at 0.5 | Downloads still work; only progress/completion/failure notifications are missing. Everything else in this checklist behaves identically |
+| H1 | Toggle "Wi‑Fi only mode" off, leave the tab, force-stop the app, come back | Switch is still **off** (persisted in DataStore) and the description reads "Downloads may continue on mobile data." |
+| H2 | Wi‑Fi only **off**, mobile data on, Wi‑Fi off, Queue a download | It actually downloads over mobile data — progress advances with Wi‑Fi disconnected |
+| H3 | Wi‑Fi only **on**, start a download, then switch Wi‑Fi off | Active download stops and the card shows the Wi‑Fi-loss message (proves the toggle changes engine behaviour, not just the switch) |
+| H4 | "Auto resume" **off**, start a download, switch Wi‑Fi off | Item becomes **Paused** with "Wi-Fi was disconnected and auto resume is off. Tap Resume when Wi-Fi is back." and does **not** restart when Wi-Fi returns |
+| H5 | With auto resume off, tap **Resume** | Starts normally — the setting only blocks the automatic restart |
+| H6 | "Download overnight" **on** during the day (between 06:00 and 22:00), then Queue an item | Item stays QUEUED with the grey note "Download overnight is on: this starts between 22:00 and 06:00…" and does not start; toggling the setting off starts it within ~2.5 s |
+| H7 | "Download overnight" on, set the phone clock inside 22:00–06:00, Queue an item | Starts immediately |
+| H8 | With overnight on, a download running when 06:00 arrives | It keeps running — only the *start* of a queued item is gated |
+| H9 | Settings → Storage overview | **Real** Used / Available / Total for the download volume (cross-check against Settings → Storage), "Queue requires" = sum of known sizes of unfinished items, "(+N with size not reported yet)" when some sizes are unknown, and Status sufficient/not enough |
+| H10 | Queue a ~10 MB file, then reopen Settings | "Queue requires" grows by roughly that size once DownloadManager has reported it |
+| H11 | Decline the notification permission at 0.5 | Downloads still work and every setting above still applies; only notifications are missing |
 
 ---
 
