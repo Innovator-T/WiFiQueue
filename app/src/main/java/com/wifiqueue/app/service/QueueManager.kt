@@ -6,9 +6,11 @@ import android.database.Cursor
 import android.net.Uri
 import android.util.Log
 import com.wifiqueue.app.data.AppDatabase
+import com.wifiqueue.app.data.AppSettings
 import com.wifiqueue.app.data.DownloadItem
 import com.wifiqueue.app.data.DownloadStateMachine
 import com.wifiqueue.app.data.DownloadStatus
+import java.util.Calendar
 
 /**
  * Owns every direct interaction with the Android DownloadManager for one
@@ -54,12 +56,27 @@ class QueueManager(private val context: Context) {
      * item can become active, and inside the sequencer's lock so no second
      * worker can start the same item twice.
      */
-    suspend fun startDownload(item: DownloadItem) {
+    suspend fun startDownload(item: DownloadItem, settings: AppSettings) {
         // Re-read from the database: a stale in-memory item may have been
         // cancelled or already started by another code path in the meantime.
         val fresh = dao.getById(item.id)
         if (fresh == null || fresh.status != DownloadStatus.QUEUED) {
             Log.d(TAG, "Skipping start; item ${item.id} is not QUEUED (was ${item.status})")
+            return
+        }
+
+        // "Download overnight" gates only the start of a download; a transfer
+        // that is already running is allowed to finish.
+        val hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        if (settings.downloadOvernight && !AppSettings.isInsideOvernightWindow(hourOfDay)) {
+            val message = "Download overnight is on: this starts between " +
+                "${AppSettings.OVERNIGHT_START_HOUR}:00 and ${AppSettings.OVERNIGHT_END_HOUR}:00. " +
+                "Turn it off in Settings to start now."
+            // Only write when the note actually changes, so a queued item does
+            // not rewrite the row on every 2.5s reconciliation tick.
+            if (fresh.systemState != message) {
+                dao.update(fresh.copy(systemState = message, updatedAt = System.currentTimeMillis()))
+            }
             return
         }
 
@@ -78,11 +95,15 @@ class QueueManager(private val context: Context) {
             val request = DownloadManager.Request(Uri.parse(fresh.url))
                 .setTitle(fresh.title)
                 .setDescription(fresh.url)
-                // Wi-Fi-only is enforced by the system engine itself, so queued
-                // downloads can never consume mobile data.
-                .setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationUri(Uri.fromFile(file))
+
+            // "Wi-Fi only" is enforced by the system engine itself, so queued
+            // downloads can never consume mobile data. When the setting is off
+            // the request keeps DownloadManager's default network types.
+            if (settings.wifiOnly) {
+                request.setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
+            }
 
             val downloadId = downloadManager.enqueue(request)
             dao.update(
@@ -391,11 +412,12 @@ class QueueManager(private val context: Context) {
 
     /**
      * Wi-Fi loss handling: the live request is actually removed from the
-     * DownloadManager (not just flagged in the database), the partial file is
-     * cleaned up, and the item returns to the queue so it restarts
-     * automatically the next time the sequencer runs with Wi-Fi connected.
+     * DownloadManager (not just flagged in the database) and the partial file is
+     * cleaned up. With "auto resume" on the item returns to the queue and
+     * restarts when the sequencer next runs with Wi-Fi; with it off the item
+     * stays PAUSED until the user taps Resume.
      */
-    suspend fun stopForNetworkLoss(item: DownloadItem) {
+    suspend fun stopForNetworkLoss(item: DownloadItem, autoResume: Boolean) {
         val fresh = dao.getById(item.id) ?: item
         if (fresh.status != DownloadStatus.DOWNLOADING) return
 
@@ -404,12 +426,16 @@ class QueueManager(private val context: Context) {
 
         dao.update(
             fresh.copy(
-                status = DownloadStatus.QUEUED,
+                status = if (autoResume) DownloadStatus.QUEUED else DownloadStatus.PAUSED,
                 progress = 0,
                 downloadedBytes = 0,
                 systemState = null,
                 downloadManagerId = null,
-                errorMessage = "Wi-Fi was disconnected. It will restart automatically when Wi-Fi returns.",
+                errorMessage = if (autoResume) {
+                    "Wi-Fi was disconnected. It will restart automatically when Wi-Fi returns."
+                } else {
+                    "Wi-Fi was disconnected and auto resume is off. Tap Resume when Wi-Fi is back."
+                },
                 updatedAt = System.currentTimeMillis()
             )
         )
